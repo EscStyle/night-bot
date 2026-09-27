@@ -69,9 +69,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             summary_text += "❌ ยังไม่มีข้อมูลการเบรค"
         else:
             for d in emp_res.data:
+                quota_left = d["quota_total"] - d["quota_used"]
                 summary_text += (
                     f"👤 รหัส: `{d['emp_id']}`\n"
                     f"• ใช้ไป: {d['quota_used']}/90 นาที | ข้าว: {d['meal_used']}/2\n"
+                    f"• คงเหลือ: {quota_left} นาที\n"
                     f"----------------------------------------\n"
                 )
         await update.message.reply_text(summary_text, parse_mode="Markdown")
