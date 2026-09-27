@@ -1,7 +1,7 @@
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
@@ -16,6 +16,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 GROUP_CHAT_ID = None
 BREAK_TYPES = {"ห้องน้ำ": 20, "ดูดบุหรี่": 10, "กินข้าว": 40, "ซื้อของ": 40}
 RETURN_COMMANDS = ["กลับ", "มาค่ะ", "มาครับ", "เข้า"]
+
+# --- กำหนดโซนเวลาประเทศไทย (UTC+7) ---
+TH_TIMEZONE = timezone(timedelta(hours=7))
 
 # --- ฟังก์ชันจำลอง Web Server สำหรับ Render (ฟรีแพลน) ---
 def run_dummy_server():
@@ -32,8 +35,8 @@ def run_dummy_server():
     server.serve_forever()
 
 def get_work_date():
-    """คำนวณรอบวันของกะดึก (ถ้ายังไม่ตี 5 จะนับเป็นของวันก่อนหน้า)"""
-    now = datetime.now()
+    """คำนวณรอบวันของกะดึกตามเวลาประเทศไทย (ถ้ายังไม่ตี 5 จะนับเป็นของวันก่อนหน้า)"""
+    now = datetime.now(TH_TIMEZONE)
     if now.hour < 5:
         return (now - timedelta(days=1)).strftime("%Y-%m-%d")
     return now.strftime("%Y-%m-%d")
@@ -107,7 +110,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         info = active_res.data[0]
         start_time = datetime.fromisoformat(info["start_time"])
-        elapsed = max(1, int((datetime.now() - start_time).total_seconds() // 60))
+        now_time = datetime.now(TH_TIMEZONE)
+        
+        elapsed = max(1, int((now_time - start_time).total_seconds() // 60))
         new_used = data["quota_used"] + elapsed
         
         supabase.table("employee_data").update({"quota_used": new_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
@@ -116,7 +121,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "work_date": current_date, 
             "break_type": info["break_type"], 
             "used_mins": elapsed, 
-            "time_range": f"{start_time.strftime('%H:%M')} - {datetime.now().strftime('%H:%M')}"
+            "time_range": f"{start_time.strftime('%H:%M')} - {now_time.strftime('%H:%M')}"
         }).execute()
         supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
         
@@ -138,7 +143,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             meal_used += 1
             supabase.table("employee_data").update({"meal_used": meal_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
         
-        now_time = datetime.now()
+        now_time = datetime.now(TH_TIMEZONE)
         due_time = now_time + timedelta(minutes=dur)
         
         supabase.table("active_breaks").upsert({
@@ -148,7 +153,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "break_type": action
         }).execute()
         
-        # ปรับรูปแบบข้อความตอบกลับให้แสดงผลครบถ้วนตามแบบฟอร์มที่คุณต้องการ
+        # แสดงเวลาตรงตามเวลาไทย
         reply_msg = (
             f"⏳ รหัส {emp_id} เริ่มเบรค {action}\n"
             f"• เวลาที่ได้: {dur} นาที\n"
