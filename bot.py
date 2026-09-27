@@ -138,14 +138,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             meal_used += 1
             supabase.table("employee_data").update({"meal_used": meal_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
         
+        now_time = datetime.now()
+        due_time = now_time + timedelta(minutes=dur)
+        
         supabase.table("active_breaks").upsert({
             "emp_id": emp_id, 
-            "start_time": datetime.now().isoformat(), 
+            "start_time": now_time.isoformat(), 
             "allowed_mins": dur, 
             "break_type": action
         }).execute()
         
-        await update.message.reply_text(f"⏳ รหัส {emp_id} เริ่มเบรค {action} ({dur} นาที)")
+        # ปรับรูปแบบข้อความตอบกลับให้แสดงผลครบถ้วนตามแบบฟอร์มที่คุณต้องการ
+        reply_msg = (
+            f"⏳ รหัส {emp_id} เริ่มเบรค {action}\n"
+            f"• เวลาที่ได้: {dur} นาที\n"
+            f"• เวลาเริ่ม: {now_time.strftime('%H:%M:%S')} น.\n"
+            f"🔔 ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
+            f"📊 {data['shift']}\n"
+            f"• โควตาเวลารวมคงเหลือ: {quota_left} นาที"
+        )
+        await update.message.reply_text(reply_msg)
 
 if __name__ == '__main__':
     # เปิด Web Server จำลองในเบื้องหลังเพื่อให้ Render ผ่านการเช็ค Port และรันฟรีได้
