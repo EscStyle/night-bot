@@ -6,7 +6,6 @@ from supabase import create_client, Client
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# --- ตั้งค่า Supabase และ Token บอทกะดึก ---
 SUPABASE_URL = "https://gxqztvcwamchihnqplin.supabase.co"
 SUPABASE_KEY = "sb_publishable_lnQnwygZZvi6orL46p9okA_gO0irVDQ"
 TOKEN = "8944966971:AAF2MAuzAEIlkkr-16wc7iTz4SxYtYWMxSU"
@@ -44,7 +43,7 @@ def get_or_create_employee(emp_id, work_date):
         new_data = {
             "emp_id": emp_id, 
             "work_date": work_date, 
-            "shift": "กะดึก (18:00 - 05:00 น.)", 
+            "shift": "กะดึก (ก(B))", 
             "quota_total": 90, 
             "quota_used": 0, 
             "meal_used": 0, 
@@ -65,16 +64,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "สรุป":
         summary_text = f"📊 **สรุปยอดกะดึก ({current_date})**\n----------------------------------------\n"
         emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
-        active_res = supabase.table("active_breaks").select("emp_id, break_type").execute()
-        active_dict = {r["emp_id"]: r["break_type"] for r in active_res.data}
         
         if not emp_res.data:
             summary_text += "❌ ยังไม่มีข้อมูลการเบรค"
         else:
             for d in emp_res.data:
-                status = f"⏳ กำลังเบรค ({active_dict[d['emp_id']]})" if d['emp_id'] in active_dict else "🟢 ทำงานปกติ"
                 summary_text += (
-                    f"👤 รหัส: `{d['emp_id']}` | {status}\n"
+                    f"👤 รหัส: `{d['emp_id']}`\n"
                     f"• ใช้ไป: {d['quota_used']}/90 นาที | ข้าว: {d['meal_used']}/2\n"
                     f"----------------------------------------\n"
                 )
@@ -89,15 +85,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quota_left = data["quota_total"] - data["quota_used"]
 
     if action == "สรุป":
-        active_res = supabase.table("active_breaks").select("break_type").eq("emp_id", emp_id).execute()
-        status = f"⏳ กำลังเบรค ({active_res.data[0]['break_type']})" if active_res.data else "🟢 ทำงานปกติ"
         await update.message.reply_text(
-            f"📊 รหัส `{emp_id}`\nสถานะ: {status}\n⏳ โควตาเหลือ: {quota_left} นาที\n🍽️ กินข้าว: {data['meal_used']}/2 ครั้ง", 
+            f"📊 รหัส `{emp_id}`\n⏳ โควตาเหลือ: {quota_left} นาที\n🍽️ กินข้าว: {data['meal_used']}/2 ครั้ง", 
             parse_mode="Markdown"
         )
         return
 
-    # แจ้งกลับเข้าทำงาน (แสดงข้อมูลครบถ้วน)
     if action in RETURN_COMMANDS:
         active_res = supabase.table("active_breaks").select("*").eq("emp_id", emp_id).execute()
         if not active_res.data:
@@ -107,26 +100,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_time = datetime.fromisoformat(info["start_time"])
         now_time = datetime.now(TH_TIMEZONE)
         
-        elapsed = max(1, int((now_time - start_time).total_seconds() // 60))
-        new_used = data["quota_used"] + elapsed
+        total_seconds = int((now_time - start_time).total_seconds())
+        mins = total_seconds // 60
+        secs = total_seconds % 60
+        elapsed_text = f"{mins} นาที {secs} วินาที" if mins > 0 else f"{secs} วินาที"
+        elapsed_mins_for_quota = max(1, mins if secs == 0 else mins + 1)
+        
+        new_used = data["quota_used"] + elapsed_mins_for_quota
         
         supabase.table("employee_data").update({"quota_used": new_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
         supabase.table("break_history").insert({
             "emp_id": emp_id, 
             "work_date": current_date, 
             "break_type": info["break_type"], 
-            "used_mins": elapsed, 
+            "used_mins": elapsed_mins_for_quota, 
             "time_range": f"{start_time.strftime('%H:%M')} - {now_time.strftime('%H:%M')}"
         }).execute()
         supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
         
         return_msg = (
-            f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว\n"
+            f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว {info['break_type']}\n"
             f"• เวลาเข้า: {now_time.strftime('%H:%M:%S')} น.\n"
-            f"• ใช้เวลาครั้งนี้: {elapsed} นาที (กำหนด {info['allowed_mins']} นาที)\n"
-            f"📊 สรุปยอดวันนี้ (รอบวันที่ {current_date}):\n"
-            f"- ใช้ไปรวม: {new_used} นาที\n"
-            f"- โควตาคงเหลือ: {data['quota_total'] - new_used} นาที"
+            f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {info['allowed_mins']} นาที)\n"
+            f"📊 โควตาคงเหลือ (กะดึก (B)): {data['quota_total'] - new_used} นาที"
         )
         await update.message.reply_text(return_msg)
         return
@@ -160,7 +156,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• เวลาที่ได้: {dur} นาที\n"
             f"• เวลาเริ่ม: {now_time.strftime('%H:%M:%S')} น.\n"
             f"🔔 ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
-            f"📊 {data['shift']}\n"
+            f"📊 กะดึก (18:00 - 05:00 น.)\n"
             f"• โควตาเวลารวมคงเหลือ: {quota_left} นาที"
         )
         await update.message.reply_text(reply_msg)
