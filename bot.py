@@ -26,6 +26,11 @@ def run_dummy_server():
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"Bot is alive!")
+            
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+
         def log_message(self, format, *args):
             pass
             
@@ -43,7 +48,6 @@ def get_personal_summary_text(emp_id, current_date):
     quota_left = quota_total - quota_used
     meal_used = d["meal_used"]
     
-    # ดึงประวัติการเบรคทั้งหมดของวันนี้สำหรับพนักงานคนนี้
     hist_res = supabase.table("break_history").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
     
     break_summary = {"ห้องน้ำ": 0, "ดูดบุหรี่": 0, "กินข้าว": 0, "ซื้อของ": 0}
@@ -57,8 +61,6 @@ def get_personal_summary_text(emp_id, current_date):
                 break_summary[b_type] = b_mins
 
     history_str = ", ".join([f"{k}: {v} นาที" for k, v in break_summary.items()])
-    
-    # เช็คสถานะ: หากใช้เวลาเกินโควตากำหนดให้แจ้งเป็น ผิดปกติ
     status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท" if quota_used <= quota_total else "ผิดปกติ / เกินเวลาโควตากำหนด"
 
     report = (
@@ -83,10 +85,8 @@ def run_auto_summary():
     while True:
         try:
             now = datetime.now(TH_TIMEZONE)
-            # สำหรับกะดึก วันทำงานของช่วงตี 5 จะถือว่าเป็นของวันก่อนหน้า
             current_date = (now - timedelta(days=1)).strftime("%Y-%m-%d") if now.hour < 5 else now.strftime("%Y-%m-%d")
             
-            # ส่งสรุปอัตโนมัติเวลา 05:00 น. (สิ้นสุดกะดึก)
             if now.hour == 5 and now.minute == 0:
                 if sent_today != current_date and GROUP_CHAT_ID:
                     emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
