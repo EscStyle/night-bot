@@ -38,7 +38,6 @@ def run_dummy_server():
     server.serve_forever()
 
 def get_personal_summary_text(emp_id, current_date):
-    # แปลงวันที่จาก YYYY-MM-DD เป็น DD/MM/YY
     date_obj = datetime.strptime(current_date, "%Y-%m-%d")
     date_str = date_obj.strftime("%d/%m/%y")
 
@@ -61,30 +60,32 @@ def get_personal_summary_text(emp_id, current_date):
         for h in hist_res.data:
             b_type = h["break_type"]
             b_mins = h["used_mins"]
+            if b_type == "ซื้อof":
+                b_type = "ซื้อของ"
+                
             if b_type in break_summary:
                 break_summary[b_type] += b_mins
             else:
                 break_summary[b_type] = b_mins
 
-            # ตรวจสอบการเกินกำหนดรายครั้ง
-            allowed_limit = BREAK_TYPES.get(b_type, 0)
+            # ตรวจสอบการเกินกำหนด "รายครั้ง" ตามที่ระบุ
+            allowed_limit = BREAK_TYPES.get(b_type, BREAK_TYPES.get("ซื้อof", 40))
             if b_mins > allowed_limit:
                 over = b_mins - allowed_limit
                 violations.append(f"• {b_type} เกินกำหนด {over} นาที (ใช้ไป {b_mins} / กำหนด {allowed_limit})")
 
     history_str = ", ".join([f"{k}: {v} นาที" for k, v in break_summary.items()])
 
-    # เช็คเงื่อนไขสถานะ
     status_parts = []
     if quota_used > quota_total:
-        status_parts.append(f"ใช้โควตารวมเกินกำหนดไป {quota_used - quota_total} นาที")
+        status_parts.append(f"• ใช้โควตารวมเกินกำหนดไป {quota_used - quota_total} นาที")
     if violations:
         status_parts.extend(violations)
 
     if not status_parts:
         status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท"
     else:
-        status_text = "ผิดปกติ / " + "\n  ".join(status_parts)
+        status_text = "ผิดปกติ /\n" + "\n".join(status_parts)
 
     report = (
         f"📝 **ใบสรุปประวัติการใช้สิทธิ์หักเบรค ({date_str})**\n"
@@ -279,7 +280,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             dur = BREAK_TYPES[action]
             meal_used = data["meal_used"]
-            if action in ["กินข้าว", "ซื้อของ"]:
+            if action in ["กินข้าว", "ซื้อของ", "ซื้อof"]:
                 if meal_used >= 2:
                     await update.message.reply_text(f"❌ ใช้สิทธิ์ข้าวครบ 2 ครั้งแล้วสำหรับกะดึก")
                     return
