@@ -189,7 +189,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emp_id, action = parts[0], parts[1]
         data = get_or_create_employee(emp_id, current_date)
 
-        # เพิ่มระบบเช็คสถานะด่วนตามรูปแบบที่ต้องการ
         if action == "เช็ค":
             quota_left = data["quota_total"] - data["quota_used"]
             check_msg = (
@@ -234,10 +233,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }).execute()
             supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
             
+            # ตรวจสอบว่าเกินเวลาที่กำหนดหรือไม่
+            allowed = info["allowed_mins"]
+            overtime_line = ""
+            if elapsed_mins_for_quota > allowed:
+                over_mins = elapsed_mins_for_quota - allowed
+                overtime_line = f"⚠️ เกินเวลาไป {over_mins} นาที\n"
+            
             return_msg = (
                 f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว ({info['break_type']})\n"
                 f"• เวลาเข้า: {now_time.strftime('%H:%M:%S')} น.\n"
-                f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {info['allowed_mins']} นาที)\n"
+                f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {allowed} นาที)\n"
+                f"{overtime_line}"
                 f"📊 โควตาคงเหลือ (กะดึก (B)): {data['quota_total'] - new_used} นาที"
             )
             await update.message.reply_text(return_msg)
