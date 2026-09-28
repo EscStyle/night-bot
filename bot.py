@@ -14,7 +14,7 @@ TOKEN = "8944966971:AAF2MAuzAEIlkkr-16wc7iTz4SxYtYWMxSU"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 GROUP_CHAT_ID = None
-BREAK_TYPES = {"ห้องน้ำ": 20, "ดูดบุหรี่": 10, "กินข้าว": 40, "ซื้อof": 40, "ซื้อของ": 40}
+BREAK_TYPES = {"ห้องน้ำ": 20, "ดูดบุหรี่": 10, "กินข้าว": 40, "ซื้อของ": 40, "ซื้อof": 40}
 RETURN_COMMANDS = ["กลับ", "มาค่ะ", "มาครับ", "เข้า"]
 
 TH_TIMEZONE = timezone(timedelta(hours=7))
@@ -53,14 +53,12 @@ def get_personal_summary_text(emp_id, current_date):
     
     hist_res = supabase.table("break_history").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
     
-    # เก็บข้อมูลสรุปแยกตามกลุ่ม (จำนวนครั้ง, จำนวนนาทีรวม)
     break_summary = {
+        "กินข้าว/ซื้อของ": {"count": meal_used, "mins": 0},
         "ห้องน้ำ": {"count": 0, "mins": 0},
-        "ดูดบุหรี่": {"count": 0, "mins": 0},
-        "กินข้าว/ซื้อของ": {"count": 0, "mins": 0}
+        "ดูดบุหรี่": {"count": 0, "mins": 0}
     }
     
-    # เก็บข้อมูลส่วนที่เกินรายประเภท สำหรับรวมยอดแจ้งเตือนบรรทัดเดียว
     violations_map = {}
     
     if hist_res.data:
@@ -70,21 +68,20 @@ def get_personal_summary_text(emp_id, current_date):
             if b_type == "ซื้อof":
                 b_type = "ซื้อของ"
                 
-            # จัดกลุ่มประเภทเบรค
             if b_type == "ห้องน้ำ":
                 group_key = "ห้องน้ำ"
                 allowed_limit = BREAK_TYPES["ห้องน้ำ"]
             elif b_type == "ดูดบุหรี่":
                 group_key = "ดูดบุหรี่"
                 allowed_limit = BREAK_TYPES["ดูดบุหรี่"]
-            else: # กินข้าว หรือ ซื้อของ
+            else:
                 group_key = "กินข้าว/ซื้อของ"
                 allowed_limit = BREAK_TYPES["กินข้าว"]
 
-            break_summary[group_key]["count"] += 1
+            if group_key != "กินข้าว/ซื้อของ":
+                break_summary[group_key]["count"] += 1
             break_summary[group_key]["mins"] += b_mins
 
-            # ตรวจสอบเวลาที่เกินกำหนดรายครั้ง
             if b_mins > allowed_limit:
                 over = b_mins - allowed_limit
                 if group_key not in violations_map:
@@ -92,17 +89,17 @@ def get_personal_summary_text(emp_id, current_date):
                 violations_map[group_key]["over_mins"] += over
                 violations_map[group_key]["count"] += 1
 
-    # สร้างข้อความประวัติการทำรายการตามฟอร์แมตใหม่
-    history_lines = []
-    for k, v in break_summary.items():
-        history_lines.append(f"{k}: {v['count']} ครั้ง / {v['mins']} นาที")
+    history_lines = [
+        f"🍽 กินข้าว/ซื้อของ: {break_summary['กินข้าว/ซื้อของ']['count']} / 2 ครั้ง / {break_summary['กินข้าว/ซื้อของ']['mins']} นาที",
+        f"🚻 ห้องน้ำ: {break_summary['ห้องน้ำ']['count']} ครั้ง / {break_summary['ห้องน้ำ']['mins']} นาที",
+        f"🚬 ดูดบุหรี่: {break_summary['ดูดบุหรี่']['count']} ครั้ง / {break_summary['ดูดบุหรี่']['mins']} นาที"
+    ]
     history_str = "\n".join(history_lines)
 
     status_parts = []
     if quota_used > quota_total:
         status_parts.append(f"• ใช้โควตารวมเกินกำหนดไป {quota_used - quota_total} นาที")
     
-    # รวมเวลาที่เกินของประเภทเดียวกันแจ้งบรรทัดเดียว
     for group_key, v in violations_map.items():
         status_parts.append(f"• {group_key} เกินกำหนดรวม {v['over_mins']} นาที (เกิน {v['count']} ครั้ง)")
 
@@ -120,8 +117,7 @@ def get_personal_summary_text(emp_id, current_date):
         f"• โควตาตั้งต้น: {quota_total} นาที\n"
         f"• ใช้ไปทั้งหมด: {quota_used} นาที\n"
         f"• โควตาคงเหลือสุทธิ: {quota_left} นาที\n\n"
-        f"🍽️ สิทธิ์อาหารและซื้อของ: ใช้ไป {meal_used} / 2 ครั้ง\n"
-        f"📁 ประวัติการทำรายการ:\n{history_str}\n"
+        f"📁 **ประวัติการทำรายการ:**\n{history_str}\n"
         f"----------------------------------------\n"
         f"สถานะ: {status_text}"
     )
@@ -337,7 +333,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
-    server_thread.server_thread = server_thread # type: ignore
     server_thread.start()
 
     bg_thread = threading.Thread(target=run_background_tasks, daemon=True)
