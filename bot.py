@@ -53,8 +53,15 @@ def get_personal_summary_text(emp_id, current_date):
     
     hist_res = supabase.table("break_history").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
     
-    break_summary = {"ห้องน้ำ": 0, "ดูดบุหรี่": 0, "กินข้าว": 0, "ซื้อของ": 0}
-    violations = []
+    # เก็บข้อมูลสรุปแยกตามกลุ่ม (จำนวนครั้ง, จำนวนนาทีรวม)
+    break_summary = {
+        "ห้องน้ำ": {"count": 0, "mins": 0},
+        "ดูดบุหรี่": {"count": 0, "mins": 0},
+        "กินข้าว/ซื้อของ": {"count": 0, "mins": 0}
+    }
+    
+    # เก็บข้อมูลส่วนที่เกินรายประเภท สำหรับรวมยอดแจ้งเตือนบรรทัดเดียว
+    violations_map = {}
     
     if hist_res.data:
         for h in hist_res.data:
@@ -63,26 +70,43 @@ def get_personal_summary_text(emp_id, current_date):
             if b_type == "ซื้อof":
                 b_type = "ซื้อของ"
                 
-            if b_type in break_summary:
-                break_summary[b_type] += b_mins
-            else:
-                break_summary[b_type] = b_mins
+            # จัดกลุ่มประเภทเบรค
+            if b_type == "ห้องน้ำ":
+                group_key = "ห้องน้ำ"
+                allowed_limit = BREAK_TYPES["ห้องน้ำ"]
+            elif b_type == "ดูดบุหรี่":
+                group_key = "ดูดบุหรี่"
+                allowed_limit = BREAK_TYPES["ดูดบุหรี่"]
+            else: # กินข้าว หรือ ซื้อของ
+                group_key = "กินข้าว/ซื้อของ"
+                allowed_limit = BREAK_TYPES["กินข้าว"]
 
-            # ตรวจสอบการเกินกำหนด "รายครั้ง" ตามที่ระบุ
-            allowed_limit = BREAK_TYPES.get(b_type, BREAK_TYPES.get("ซื้อof", 40))
+            break_summary[group_key]["count"] += 1
+            break_summary[group_key]["mins"] += b_mins
+
+            # ตรวจสอบเวลาที่เกินกำหนดรายครั้ง
             if b_mins > allowed_limit:
                 over = b_mins - allowed_limit
-                violations.append(f"• {b_type} เกินกำหนด {over} นาที (ใช้ไป {b_mins} / กำหนด {allowed_limit})")
+                if group_key not in violations_map:
+                    violations_map[group_key] = {"over_mins": 0, "count": 0}
+                violations_map[group_key]["over_mins"] += over
+                violations_map[group_key]["count"] += 1
 
-    history_str = ", ".join([f"{k}: {v} นาที" for k, v in break_summary.items()])
+    # สร้างข้อความประวัติการทำรายการตามฟอร์แมตใหม่
+    history_lines = []
+    for k, v in break_summary.items():
+        history_lines.append(f"{k}: {v['count']} ครั้ง / {v['mins']} นาที")
+    history_str = "\n".join(history_lines)
 
     status_parts = []
     if quota_used > quota_total:
         status_parts.append(f"• ใช้โควตารวมเกินกำหนดไป {quota_used - quota_total} นาที")
-    if violations:
-        status_parts.extend(violations)
+    
+    # รวมเวลาที่เกินของประเภทเดียวกันแจ้งบรรทัดเดียว
+    for group_key, v in violations_map.items():
+        status_parts.append(f"• {group_key} เกินกำหนดรวม {v['over_mins']} นาที (เกิน {v['count']} ครั้ง)")
 
-    if not status_parts:
+    if not status_parts and quota_used <= quota_total:
         status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท"
     else:
         status_text = "ผิดปกติ /\n" + "\n".join(status_parts)
@@ -97,7 +121,7 @@ def get_personal_summary_text(emp_id, current_date):
         f"• ใช้ไปทั้งหมด: {quota_used} นาที\n"
         f"• โควตาคงเหลือสุทธิ: {quota_left} นาที\n\n"
         f"🍽️ สิทธิ์อาหารและซื้อของ: ใช้ไป {meal_used} / 2 ครั้ง\n"
-        f"📁 ประวัติการทำรายการ: {history_str}\n"
+        f"📁 ประวัติการทำรายการ:\n{history_str}\n"
         f"----------------------------------------\n"
         f"สถานะ: {status_text}"
     )
