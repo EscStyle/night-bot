@@ -51,6 +51,8 @@ def get_personal_summary_text(emp_id, current_date):
     hist_res = supabase.table("break_history").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
     
     break_summary = {"ห้องน้ำ": 0, "ดูดบุหรี่": 0, "กินข้าว": 0, "ซื้อของ": 0}
+    violations = []
+    
     if hist_res.data:
         for h in hist_res.data:
             b_type = h["break_type"]
@@ -60,8 +62,25 @@ def get_personal_summary_text(emp_id, current_date):
             else:
                 break_summary[b_type] = b_mins
 
+            # ตรวจสอบการเกินกำหนดรายครั้ง
+            allowed_limit = BREAK_TYPES.get(b_type, 0)
+            if b_mins > allowed_limit:
+                over = b_mins - allowed_limit
+                violations.append(f"• {b_type} เกินกำหนด {over} นาที (ใช้ไป {b_mins} / กำหนด {allowed_limit})")
+
     history_str = ", ".join([f"{k}: {v} นาที" for k, v in break_summary.items()])
-    status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท" if quota_used <= quota_total else "ผิดปกติ / เกินเวลาโควตากำหนด"
+
+    # เช็คเงื่อนไขสถานะ
+    status_parts = []
+    if quota_used > quota_total:
+        status_parts.append(f"ใช้โควตารวมเกินกำหนดไป {quota_used - quota_total} นาที")
+    if violations:
+        status_parts.extend(violations)
+
+    if not status_parts:
+        status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท"
+    else:
+        status_text = "ผิดปกติ / " + "\n  ".join(status_parts)
 
     report = (
         f"📝 **ใบสรุปประวัติการใช้สิทธิ์หักเบรค (Personal Break Report)**\n"
@@ -233,7 +252,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }).execute()
             supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
             
-            # ตรวจสอบว่าเกินเวลาที่กำหนดหรือไม่
             allowed = info["allowed_mins"]
             overtime_line = ""
             if elapsed_mins_for_quota > allowed:
