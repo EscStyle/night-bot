@@ -107,10 +107,10 @@ def run_auto_summary():
                     requests.post(url, json=payload)
                     sent_today = current_date
             
-            threading.Event().wait(30)
+            threading.Event().wait(15)
         except Exception as e:
             print("Error in auto summary thread:", e)
-            threading.Event().wait(30)
+            threading.Event().wait(15)
 
 def get_work_date():
     now = datetime.now(TH_TIMEZONE)
@@ -194,7 +194,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
             
             return_msg = (
-                f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว {info['break_type']}\n"
+                f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว ({info['break_type']})\n"
                 f"• เวลาเข้า: {now_time.strftime('%H:%M:%S')} น.\n"
                 f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {info['allowed_mins']} นาที)\n"
                 f"📊 โควตาคงเหลือ (กะดึก (B)): {data['quota_total'] - new_used} นาที"
@@ -230,7 +230,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⏳ รหัส {emp_id} เริ่มเบรค {action}\n"
                 f"• เวลาที่ได้: {dur} นาที\n"
                 f"• เวลาเริ่ม: {now_time.strftime('%H:%M:%S')} น.\n"
-                f"🔔 ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
+                f"• ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
                 f"📊 กะดึก (18:00 - 05:00 น.)\n"
                 f"• โควตาเวลารวมคงเหลือ: {data['quota_total'] - data['quota_used']} นาที"
             )
