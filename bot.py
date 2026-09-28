@@ -14,7 +14,7 @@ TOKEN = "8944966971:AAF2MAuzAEIlkkr-16wc7iTz4SxYtYWMxSU"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 GROUP_CHAT_ID = None
-BREAK_TYPES = {"ห้องน้ำ": 20, "ดูดบุหรี่": 10, "กินข้าว": 40, "ซื้อของ": 40}
+BREAK_TYPES = {"ห้องน้ำ": 20, "ดูดบุหรี่": 10, "กินข้าว": 40, "ซื้อof": 40, "ซื้อของ": 40}
 RETURN_COMMANDS = ["กลับ", "มาค่ะ", "มาครับ", "เข้า"]
 
 TH_TIMEZONE = timezone(timedelta(hours=7))
@@ -38,9 +38,13 @@ def run_dummy_server():
     server.serve_forever()
 
 def get_personal_summary_text(emp_id, current_date):
+    # แปลงวันที่จาก YYYY-MM-DD เป็น DD/MM/YY
+    date_obj = datetime.strptime(current_date, "%Y-%m-%d")
+    date_str = date_obj.strftime("%d/%m/%y")
+
     data_res = supabase.table("employee_data").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
     if not data_res.data:
-        return f"❌ ยังไม่มีข้อมูลการเบรคของรหัส {emp_id} ในวันนี้"
+        return f"❌ ยังไม่มีข้อมูลการเบรคของรหัส {emp_id} ในวันที่ {date_str}"
     
     d = data_res.data[0]
     quota_total = d["quota_total"]
@@ -83,7 +87,7 @@ def get_personal_summary_text(emp_id, current_date):
         status_text = "ผิดปกติ / " + "\n  ".join(status_parts)
 
     report = (
-        f"📝 **ใบสรุปประวัติการใช้สิทธิ์หักเบรค (Personal Break Report)**\n"
+        f"📝 **ใบสรุปประวัติการใช้สิทธิ์หักเบรค ({date_str})**\n"
         f"----------------------------------------\n"
         f"🔹 รหัสพนักงาน: `{emp_id}` 🔹 ประจำกะ: รอบกะดึก (B)\n"
         f"----------------------------------------\n"
@@ -308,6 +312,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
+    server_thread.server_thread = server_thread # type: ignore
     server_thread.start()
 
     bg_thread = threading.Thread(target=run_background_tasks, daemon=True)
