@@ -1,5 +1,6 @@
 import os
 import threading
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
@@ -30,6 +31,86 @@ def run_dummy_server():
             
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
+
+def get_personal_summary_text(emp_id, current_date):
+    data_res = supabase.table("employee_data").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
+    if not data_res.data:
+        return f"❌ ยังไม่มีข้อมูลการเบรคของรหัส {emp_id} ในวันนี้"
+    
+    d = data_res.data[0]
+    quota_total = d["quota_total"]
+    quota_used = d["quota_used"]
+    quota_left = quota_total - quota_used
+    meal_used = d["meal_used"]
+    
+    # ดึงประวัติการเบรคทั้งหมดของวันนี้สำหรับพนักงานคนนี้
+    hist_res = supabase.table("break_history").select("*").eq("emp_id", emp_id).eq("work_date", current_date).execute()
+    
+    break_summary = {"ห้องน้ำ": 0, "ดูดบุหรี่": 0, "กินข้าว": 0, "ซื้อของ": 0}
+    if hist_res.data:
+        for h in hist_res.data:
+            b_type = h["break_type"]
+            b_mins = h["used_mins"]
+            if b_type in break_summary:
+                break_summary[b_type] += b_mins
+            else:
+                break_summary[b_type] = b_mins
+
+    history_str = ", ".join([f"{k}: {v} นาที" for k, v in break_summary.items()])
+    
+    # เช็คสถานะ: หากใช้เวลาเกินโควตากำหนด (90 นาที) ให้แจ้งเป็น ผิดปกติ
+    status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท" if quota_used <= quota_total else "ผิดปกติ / เกินเวลาโควตากำหนด"
+
+    report = (
+        f"📝 **ใบสรุปประวัติการใช้สิทธิ์หักเบรค (Personal Break Report)**\n"
+        f"----------------------------------------\n"
+        f"🔹 รหัสพนักงาน: `{emp_id}` 🔹 ประจำกะ: รอบกะดึก (B)\n"
+        f"----------------------------------------\n"
+        f"⏱️ **สรุปเวลา:**\n"
+        f"• โควตาตั้งต้น: {quota_total} นาที\n"
+        f"• ใช้ไปทั้งหมด: {quota_used} นาที\n"
+        f"• โควตาคงเหลือสุทธิ: {quota_left} นาที\n\n"
+        f"🍽️ สิทธิ์อาหารและซื้อของ: ใช้ไป {meal_used} / 2 ครั้ง\n"
+        f"📁 ประวัติการทำรายการ: {history_str}\n"
+        f"----------------------------------------\n"
+        f"สถานะ: {status_text}"
+    )
+    return report
+
+def run_auto_summary():
+    global GROUP_CHAT_ID
+    sent_today = None
+    while True:
+        try:
+            now = datetime.now(TH_TIMEZONE)
+            # สำหรับกะดึก วันทำงานของช่วงตี 5 จะถือว่าเป็นของวันก่อนหน้า
+            current_date = (now - timedelta(days=1)).strftime("%Y-%m-%d") if now.hour < 5 else now.strftime("%Y-%m-%d")
+            
+            # ส่งสรุปอัตโนมัติเวลา 05:00 น. (สิ้นสุดกะดึก)
+            if now.hour == 5 and now.minute == 0:
+                if sent_today != current_date and GROUP_CHAT_ID:
+                    emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
+                    
+                    if not emp_res.data:
+                        summary_text = f"📊 **สรุปยอดกะดึกประจำวัน ({current_date})**\n----------------------------------------\n❌ ยังไม่มีข้อมูลการเบรคในวันนี้"
+                    else:
+                        summary_text = f"📊 **สรุปยอดกะดึกประจำวัน ({current_date}) [สรุปอัตโนมัติสิ้นสุดกะ]**\n----------------------------------------\n"
+                        for d in emp_res.data:
+                            summary_text += get_personal_summary_text(d['emp_id'], current_date) + "\n\n========================================\n"
+                    
+                    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+                    payload = {
+                        "chat_id": GROUP_CHAT_ID,
+                        "text": summary_text,
+                        "parse_mode": "Markdown"
+                    }
+                    requests.post(url, json=payload)
+                    sent_today = current_date
+            
+            threading.Event().wait(30)
+        except Exception as e:
+            print("Error in auto summary thread:", e)
+            threading.Event().wait(30)
 
 def get_work_date():
     now = datetime.now(TH_TIMEZONE)
@@ -62,21 +143,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_date = get_work_date()
 
     if text == "สรุป":
-        summary_text = f"📊 **สรุปยอดกะดึก ({current_date})**\n----------------------------------------\n"
         emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
-        
         if not emp_res.data:
-            summary_text += "❌ ยังไม่มีข้อมูลการเบรค"
-        else:
-            for d in emp_res.data:
-                quota_left = d["quota_total"] - d["quota_used"]
-                summary_text += (
-                    f"👤 รหัส: `{d['emp_id']}`\n"
-                    f"• ใช้ไป: {d['quota_used']}/90 นาที | ข้าว: {d['meal_used']}/2\n"
-                    f"• คงเหลือ: {quota_left} นาที\n"
-                    f"----------------------------------------\n"
-                )
-        await update.message.reply_text(summary_text, parse_mode="Markdown")
+            await update.message.reply_text(f"📊 **สรุปยอดกะดึก ({current_date})**\n----------------------------------------\n❌ ยังไม่มีข้อมูลการเบรค", parse_mode="Markdown")
+            return
+        
+        for d in emp_res.data:
+            report = get_personal_summary_text(d['emp_id'], current_date)
+            await update.message.reply_text(report, parse_mode="Markdown")
         return
 
     parts = text.split()
@@ -84,13 +158,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     emp_id, action = parts[0], parts[1]
     data = get_or_create_employee(emp_id, current_date)
-    quota_left = data["quota_total"] - data["quota_used"]
 
     if action == "สรุป":
-        await update.message.reply_text(
-            f"📊 รหัส `{emp_id}`\n⏳ โควตาเหลือ: {quota_left} นาที\n🍽️ กินข้าว: {data['meal_used']}/2 ครั้ง", 
-            parse_mode="Markdown"
-        )
+        report = get_personal_summary_text(emp_id, current_date)
+        await update.message.reply_text(report, parse_mode="Markdown")
         return
 
     if action in RETURN_COMMANDS:
@@ -138,7 +209,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         meal_used = data["meal_used"]
         if action in ["กินข้าว", "ซื้อของ"]:
             if meal_used >= 2:
-                await update.message.reply_text(f"❌ ใช้สิทธิ์ข้าวครบ 2 ครั้งแล้ว")
+                await update.message.reply_text(f"❌ ใช้สิทธิ์ข้าวครบ 2 ครั้งแล้วสำหรับกะดึก")
                 return
             meal_used += 1
             supabase.table("employee_data").update({"meal_used": meal_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
@@ -159,13 +230,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• เวลาเริ่ม: {now_time.strftime('%H:%M:%S')} น.\n"
             f"🔔 ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
             f"📊 กะดึก (18:00 - 05:00 น.)\n"
-            f"• โควตาเวลารวมคงเหลือ: {quota_left} นาที"
+            f"• โควตาเวลารวมคงเหลือ: {data['quota_total'] - data['quota_used']} นาที"
         )
         await update.message.reply_text(reply_msg)
 
 if __name__ == '__main__':
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
     server_thread.start()
+
+    summary_thread = threading.Thread(target=run_auto_summary, daemon=True)
+    summary_thread.start()
 
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
