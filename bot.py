@@ -58,7 +58,7 @@ def get_personal_summary_text(emp_id, current_date):
 
     history_str = ", ".join([f"{k}: {v} นาที" for k, v in break_summary.items()])
     
-    # เช็คสถานะ: หากใช้เวลาเกินโควตากำหนด (90 นาที) ให้แจ้งเป็น ผิดปกติ
+    # เช็คสถานะ: หากใช้เวลาเกินโควตากำหนดให้แจ้งเป็น ผิดปกติ
     status_text = "ปกติ / เป็นไปตามระเบียบของบริษัท" if quota_used <= quota_total else "ผิดปกติ / เกินเวลาโควตากำหนด"
 
     report = (
@@ -140,99 +140,105 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     GROUP_CHAT_ID = update.message.chat_id
     text = update.message.text.strip()
-    current_date = get_work_date()
+    
+    try:
+        current_date = get_work_date()
 
-    if text == "สรุป":
-        emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
-        if not emp_res.data:
-            await update.message.reply_text(f"📊 **สรุปยอดกะดึก ({current_date})**\n----------------------------------------\n❌ ยังไม่มีข้อมูลการเบรค", parse_mode="Markdown")
-            return
-        
-        for d in emp_res.data:
-            report = get_personal_summary_text(d['emp_id'], current_date)
-            await update.message.reply_text(report, parse_mode="Markdown")
-        return
-
-    parts = text.split()
-    if len(parts) < 2: 
-        return
-    emp_id, action = parts[0], parts[1]
-    data = get_or_create_employee(emp_id, current_date)
-
-    if action == "สรุป":
-        report = get_personal_summary_text(emp_id, current_date)
-        await update.message.reply_text(report, parse_mode="Markdown")
-        return
-
-    if action in RETURN_COMMANDS:
-        active_res = supabase.table("active_breaks").select("*").eq("emp_id", emp_id).execute()
-        if not active_res.data:
-            await update.message.reply_text(f"รหัส {emp_id} ยังไม่ได้เริ่มเบรค")
-            return
-        info = active_res.data[0]
-        start_time = datetime.fromisoformat(info["start_time"])
-        now_time = datetime.now(TH_TIMEZONE)
-        
-        total_seconds = int((now_time - start_time).total_seconds())
-        mins = total_seconds // 60
-        secs = total_seconds % 60
-        elapsed_text = f"{mins} นาที {secs} วินาที" if mins > 0 else f"{secs} วินาที"
-        elapsed_mins_for_quota = max(1, mins if secs == 0 else mins + 1)
-        
-        new_used = data["quota_used"] + elapsed_mins_for_quota
-        
-        supabase.table("employee_data").update({"quota_used": new_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
-        supabase.table("break_history").insert({
-            "emp_id": emp_id, 
-            "work_date": current_date, 
-            "break_type": info["break_type"], 
-            "used_mins": elapsed_mins_for_quota, 
-            "time_range": f"{start_time.strftime('%H:%M')} - {now_time.strftime('%H:%M')}"
-        }).execute()
-        supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
-        
-        return_msg = (
-            f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว {info['break_type']}\n"
-            f"• เวลาเข้า: {now_time.strftime('%H:%M:%S')} น.\n"
-            f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {info['allowed_mins']} นาที)\n"
-            f"📊 โควตาคงเหลือ (กะดึก (B)): {data['quota_total'] - new_used} นาที"
-        )
-        await update.message.reply_text(return_msg)
-        return
-
-    if action in BREAK_TYPES:
-        active_res = supabase.table("active_breaks").select("*").eq("emp_id", emp_id).execute()
-        if active_res.data:
-            await update.message.reply_text(f"รหัส {emp_id} กำลังเบรคอยู่")
-            return
-        dur = BREAK_TYPES[action]
-        meal_used = data["meal_used"]
-        if action in ["กินข้าว", "ซื้อของ"]:
-            if meal_used >= 2:
-                await update.message.reply_text(f"❌ ใช้สิทธิ์ข้าวครบ 2 ครั้งแล้วสำหรับกะดึก")
+        if text == "สรุป":
+            emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
+            if not emp_res.data:
+                await update.message.reply_text(f"📊 **สรุปยอดกะดึก ({current_date})**\n----------------------------------------\n❌ ยังไม่มีข้อมูลการเบรค", parse_mode="Markdown")
                 return
-            meal_used += 1
-            supabase.table("employee_data").update({"meal_used": meal_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
-        
-        now_time = datetime.now(TH_TIMEZONE)
-        due_time = now_time + timedelta(minutes=dur)
-        
-        supabase.table("active_breaks").upsert({
-            "emp_id": emp_id, 
-            "start_time": now_time.isoformat(), 
-            "allowed_mins": dur, 
-            "break_type": action
-        }).execute()
-        
-        reply_msg = (
-            f"⏳ รหัส {emp_id} เริ่มเบรค {action}\n"
-            f"• เวลาที่ได้: {dur} นาที\n"
-            f"• เวลาเริ่ม: {now_time.strftime('%H:%M:%S')} น.\n"
-            f"🔔 ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
-            f"📊 กะดึก (18:00 - 05:00 น.)\n"
-            f"• โควตาเวลารวมคงเหลือ: {data['quota_total'] - data['quota_used']} นาที"
-        )
-        await update.message.reply_text(reply_msg)
+            
+            for d in emp_res.data:
+                report = get_personal_summary_text(d['emp_id'], current_date)
+                await update.message.reply_text(report, parse_mode="Markdown")
+            return
+
+        parts = text.split()
+        if len(parts) < 2: 
+            return
+        emp_id, action = parts[0], parts[1]
+        data = get_or_create_employee(emp_id, current_date)
+
+        if action == "สรุป":
+            report = get_personal_summary_text(emp_id, current_date)
+            await update.message.reply_text(report, parse_mode="Markdown")
+            return
+
+        if action in RETURN_COMMANDS:
+            active_res = supabase.table("active_breaks").select("*").eq("emp_id", emp_id).execute()
+            if not active_res.data:
+                await update.message.reply_text(f"รหัส {emp_id} ยังไม่ได้เริ่มเบรค")
+                return
+            info = active_res.data[0]
+            start_time = datetime.fromisoformat(info["start_time"])
+            now_time = datetime.now(TH_TIMEZONE)
+            
+            total_seconds = int((now_time - start_time).total_seconds())
+            mins = total_seconds // 60
+            secs = total_seconds % 60
+            elapsed_text = f"{mins} นาที {secs} วินาที" if mins > 0 else f"{secs} วินาที"
+            elapsed_mins_for_quota = max(1, mins if secs == 0 else mins + 1)
+            
+            new_used = data["quota_used"] + elapsed_mins_for_quota
+            
+            supabase.table("employee_data").update({"quota_used": new_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
+            supabase.table("break_history").insert({
+                "emp_id": emp_id, 
+                "work_date": current_date, 
+                "break_type": info["break_type"], 
+                "used_mins": elapsed_mins_for_quota, 
+                "time_range": f"{start_time.strftime('%H:%M')} - {now_time.strftime('%H:%M')}"
+            }).execute()
+            supabase.table("active_breaks").delete().eq("emp_id", emp_id).execute()
+            
+            return_msg = (
+                f"🏁 รหัส {emp_id} กลับเข้าทำงานแล้ว {info['break_type']}\n"
+                f"• เวลาเข้า: {now_time.strftime('%H:%M:%S')} น.\n"
+                f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {info['allowed_mins']} นาที)\n"
+                f"📊 โควตาคงเหลือ (กะดึก (B)): {data['quota_total'] - new_used} นาที"
+            )
+            await update.message.reply_text(return_msg)
+            return
+
+        if action in BREAK_TYPES:
+            active_res = supabase.table("active_breaks").select("*").eq("emp_id", emp_id).execute()
+            if active_res.data:
+                await update.message.reply_text(f"รหัส {emp_id} กำลังเบรคอยู่")
+                return
+            dur = BREAK_TYPES[action]
+            meal_used = data["meal_used"]
+            if action in ["กินข้าว", "ซื้อของ"]:
+                if meal_used >= 2:
+                    await update.message.reply_text(f"❌ ใช้สิทธิ์ข้าวครบ 2 ครั้งแล้วสำหรับกะดึก")
+                    return
+                meal_used += 1
+                supabase.table("employee_data").update({"meal_used": meal_used}).eq("emp_id", emp_id).eq("work_date", current_date).execute()
+            
+            now_time = datetime.now(TH_TIMEZONE)
+            due_time = now_time + timedelta(minutes=dur)
+            
+            supabase.table("active_breaks").upsert({
+                "emp_id": emp_id, 
+                "start_time": now_time.isoformat(), 
+                "allowed_mins": dur, 
+                "break_type": action
+            }).execute()
+            
+            reply_msg = (
+                f"⏳ รหัส {emp_id} เริ่มเบรค {action}\n"
+                f"• เวลาที่ได้: {dur} นาที\n"
+                f"• เวลาเริ่ม: {now_time.strftime('%H:%M:%S')} น.\n"
+                f"🔔 ควรกลับเข้าทำงานก่อนเวลา: {due_time.strftime('%H:%M:%S')} น.\n"
+                f"📊 กะดึก (18:00 - 05:00 น.)\n"
+                f"• โควตาเวลารวมคงเหลือ: {data['quota_total'] - data['quota_used']} นาที"
+            )
+            await update.message.reply_text(reply_msg)
+            
+    except Exception as e:
+        print("Error handling message:", e)
+        await update.message.reply_text(f"⚠️ เกิดข้อผิดพลาดในระบบ: {e}")
 
 if __name__ == '__main__':
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
