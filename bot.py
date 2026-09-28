@@ -79,14 +79,49 @@ def get_personal_summary_text(emp_id, current_date):
     )
     return report
 
-def run_auto_summary():
+def run_background_tasks():
     global GROUP_CHAT_ID
     sent_today = None
+    notified_overtime = set()
+
     while True:
         try:
             now = datetime.now(TH_TIMEZONE)
             current_date = (now - timedelta(days=1)).strftime("%Y-%m-%d") if now.hour < 5 else now.strftime("%Y-%m-%d")
             
+            # 1. ตรวจสอบการแจ้งเตือนเบรคเกินเวลาทุกๆ 1 นาที
+            if GROUP_CHAT_ID:
+                active_res = supabase.table("active_breaks").select("*").execute()
+                if active_res.data:
+                    for info in active_res.data:
+                        emp_id = info["emp_id"]
+                        start_time = datetime.fromisoformat(info["start_time"])
+                        allowed_mins = info["allowed_mins"]
+                        break_type = info["break_type"]
+                        
+                        elapsed_seconds = (now - start_time).total_seconds()
+                        elapsed_mins = elapsed_seconds / 60
+                        
+                        if elapsed_mins > allowed_mins and emp_id not in notified_overtime:
+                            over_mins = int(elapsed_mins - allowed_mins)
+                            alert_msg = (
+                                f"🚨 **แจ้งเตือน! พนักงานเบรคเกินเวลา** 🚨\n"
+                                f"----------------------------------------\n"
+                                f"🔹 รหัสพนักงาน: `{emp_id}`\n"
+                                f"• ประเภทเบรค: {break_type} (กำหนด {allowed_mins} นาที)\n"
+                                f"• เกินเวลามาแล้ว: ประมาณ {over_mins} นาที\n"
+                                f"⚠️ กรุณากลับเข้าทำงานหรือรายงานตัวด่วน!"
+                            )
+                            url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+                            requests.post(url, json={"chat_id": GROUP_CHAT_ID, "text": alert_msg, "parse_mode": "Markdown"})
+                            notified_overtime.add(emp_id)
+
+                active_emp_ids = {i["emp_id"] for i in (active_res.data or [])}
+                for emp_id in list(notified_overtime):
+                    if emp_id not in active_emp_ids:
+                        notified_overtime.remove(emp_id)
+
+            # 2. ส่งสรุปอัตโนมัติเวลา 05:00 น. (สิ้นสุดกะดึก)
             if now.hour == 5 and now.minute == 0:
                 if sent_today != current_date and GROUP_CHAT_ID:
                     emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
@@ -99,17 +134,12 @@ def run_auto_summary():
                             summary_text += get_personal_summary_text(d['emp_id'], current_date) + "\n\n========================================\n"
                     
                     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-                    payload = {
-                        "chat_id": GROUP_CHAT_ID,
-                        "text": summary_text,
-                        "parse_mode": "Markdown"
-                    }
-                    requests.post(url, json=payload)
+                    requests.post(url, json={"chat_id": GROUP_CHAT_ID, "text": summary_text, "parse_mode": "Markdown"})
                     sent_today = current_date
             
             threading.Event().wait(15)
         except Exception as e:
-            print("Error in auto summary thread:", e)
+            print("Error in background tasks thread:", e)
             threading.Event().wait(15)
 
 def get_work_date():
@@ -244,8 +274,8 @@ if __name__ == '__main__':
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
     server_thread.start()
 
-    summary_thread = threading.Thread(target=run_auto_summary, daemon=True)
-    summary_thread.start()
+    bg_thread = threading.Thread(target=run_background_tasks, daemon=True)
+    bg_thread.start()
 
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
