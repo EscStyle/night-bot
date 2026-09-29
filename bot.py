@@ -37,6 +37,14 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
+def get_work_date():
+    # สำหรับกะดึก (18:00 - 05:00): หากเวลาอยู่ระหว่าง 00:00 ถึง 04:59 ให้ถือว่าเป็นวันทำงานของ "เมื่อวาน"
+    now = datetime.now(TH_TIMEZONE)
+    if now.hour < 5:
+        work_date = now - timedelta(days=1)
+        return work_date.strftime("%Y-%m-%d")
+    return now.strftime("%Y-%m-%d")
+
 def get_personal_summary_text(emp_id, current_date):
     date_obj = datetime.strptime(current_date, "%Y-%m-%d")
     date_str = date_obj.strftime("%d/%m/%y")
@@ -111,7 +119,7 @@ def get_personal_summary_text(emp_id, current_date):
     report = (
         f"📝 **ใบสรุปประวัติการใช้สิทธิ์หักเบรค ({date_str})**\n"
         f"----------------------------------------\n"
-        f"🔹 รหัสพนักงาน: `{emp_id}` 🔹 ประจำกะ: รอบกะดึก (B)\n"
+        f"🔹 รหัสพนักงาน: `{emp_id}` 🔹 ประจำกะ: กะดึก (18:00 - 05:00 น.)\n"
         f"----------------------------------------\n"
         f"⏱️ **สรุปเวลา:**\n"
         f"• โควตาตั้งต้น: {quota_total} นาที\n"
@@ -131,7 +139,7 @@ def run_background_tasks():
     while True:
         try:
             now = datetime.now(TH_TIMEZONE)
-            current_date = (now - timedelta(days=1)).strftime("%Y-%m-%d") if now.hour < 5 else now.strftime("%Y-%m-%d")
+            current_date = get_work_date()
             
             if GROUP_CHAT_ID:
                 active_res = supabase.table("active_breaks").select("*").execute()
@@ -164,31 +172,27 @@ def run_background_tasks():
                     if emp_id not in active_emp_ids:
                         notified_overtime.remove(emp_id)
 
+            # สรุปยอดอัตโนมัติหลังเลิกงานกะดึกเวลา 05:00 น. ของวันรุ่งขึ้น
             if now.hour == 5 and now.minute == 0:
-                if sent_today != current_date and GROUP_CHAT_ID:
-                    emp_res = supabase.table("employee_data").select("*").eq("work_date", current_date).execute()
+                target_summary_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+                if sent_today != target_summary_date and GROUP_CHAT_ID:
+                    emp_res = supabase.table("employee_data").select("*").eq("work_date", target_summary_date).execute()
                     
                     if not emp_res.data:
-                        summary_text = f"📊 **สรุปยอดกะดึกประจำวัน ({current_date})**\n----------------------------------------\n❌ ยังไม่มีข้อมูลการเบรคในวันนี้"
+                        summary_text = f"📊 **สรุปยอดกะดึกประจำวัน ({target_summary_date})**\n----------------------------------------\n❌ ยังไม่มีข้อมูลการเบรคในวันนี้"
                     else:
-                        summary_text = f"📊 **สรุปยอดกะดึกประจำวัน ({current_date}) [สรุปอัตโนมัติสิ้นสุดกะ]**\n----------------------------------------\n"
+                        summary_text = f"📊 **สรุปยอดกะดึกประจำวัน ({target_summary_date}) [สรุปอัตโนมัติสิ้นสุดกะ]**\n----------------------------------------\n"
                         for d in emp_res.data:
-                            summary_text += get_personal_summary_text(d['emp_id'], current_date) + "\n\n========================================\n"
+                            summary_text += get_personal_summary_text(d['emp_id'], target_summary_date) + "\n\n========================================\n"
                     
                     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
                     requests.post(url, json={"chat_id": GROUP_CHAT_ID, "text": summary_text, "parse_mode": "Markdown"})
-                    sent_today = current_date
+                    sent_today = target_summary_date
             
             threading.Event().wait(15)
         except Exception as e:
             print("Error in background tasks thread:", e)
             threading.Event().wait(15)
-
-def get_work_date():
-    now = datetime.now(TH_TIMEZONE)
-    if now.hour < 5:
-        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    return now.strftime("%Y-%m-%d")
 
 def get_or_create_employee(emp_id, work_date):
     res = supabase.table("employee_data").select("*").eq("emp_id", emp_id).eq("work_date", work_date).execute()
@@ -196,7 +200,7 @@ def get_or_create_employee(emp_id, work_date):
         new_data = {
             "emp_id": emp_id, 
             "work_date": work_date, 
-            "shift": "กะดึก (ก(B))", 
+            "shift": "กะดึก (18:00 - 05:00 น.)", 
             "quota_total": 90, 
             "quota_used": 0, 
             "meal_used": 0, 
@@ -238,7 +242,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             check_msg = (
                 f"📊 รายงานสถานะเบรค\n"
                 f"👤 รหัสพนักงาน: {emp_id}\n"
-                f"⏰ ช่วงเวลา: กะดึก (B)\n"
+                f"⏰ ช่วงเวลา: กะดึก (18:00 - 05:00 น.)\n"
                 f"⏳ โควตาเวลาคงเหลือ: {quota_left} / {data['quota_total']} นาที\n"
                 f"🍽️ สิทธิ์กินข้าว/ซื้อของ: {data['meal_used']} / 2 ครั้ง"
             )
@@ -288,7 +292,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• เวลาเข้า: {now_time.strftime('%H:%M:%S')} น.\n"
                 f"• ใช้เวลาครั้งนี้: {elapsed_text} (กำหนด {allowed} นาที)\n"
                 f"{overtime_line}"
-                f"📊 โควตาคงเหลือ (กะดึก (B)): {data['quota_total'] - new_used} นาที"
+                f"📊 โควตาคงเหลือ (กะดึก): {data['quota_total'] - new_used} นาที"
             )
             await update.message.reply_text(return_msg)
             return
